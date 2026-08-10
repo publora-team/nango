@@ -9069,6 +9069,16 @@ Pass the API key as a Bearer token in the `Authorization` header:
 
 Scopes control what an API key can access. When creating a key with **Custom** permissions, you select which scopes to grant. A key without a specific scope will receive a `403 Forbidden` response when trying to access a protected endpoint.
 
+### Account API key scopes
+
+Account API keys created in the dashboard currently receive the `account:*` scope, which grants access to every account-level API. The following granular scopes define the permissions required by environment-management endpoints:
+
+| Scope | Description |
+|-------|-------------|
+| `account:environments:create` | Create non-production environments |
+| `account:environments:delete` | Delete environments other than the protected `prod` environment |
+| `account:environments:set_production` | Create a production environment; required in addition to `account:environments:create` |
+
 ### Credential Scopes
 
 Some resources (Integrations and Connections) have sensitive credential data. Access to this data is controlled by dedicated `_credentials` scopes:
