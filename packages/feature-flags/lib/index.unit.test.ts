@@ -77,7 +77,10 @@ vi.mock('unleash-client', () => {
 });
 
 describe('getFeatureFlagsClient', () => {
+    const realEnv = process.env;
+
     beforeEach(() => {
+        process.env = Object.fromEntries(Object.entries(realEnv).filter(([name]) => !name.startsWith('NANGO_FEATURE_FLAG_')));
         vi.useRealTimers();
         vi.clearAllMocks();
         mockEnvs.NANGO_FLAG_PROVIDER = 'noop';
@@ -94,6 +97,7 @@ describe('getFeatureFlagsClient', () => {
     afterEach(async () => {
         const { destroy } = await import('./index.js');
         await destroy();
+        process.env = realEnv;
         vi.resetModules();
         vi.restoreAllMocks();
         vi.useRealTimers();

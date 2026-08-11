@@ -3,6 +3,7 @@ import { getLogger, metrics } from '@nangohq/utils';
 import { buildFeatureFlagsClient } from './client.js';
 import { envs } from './env.js';
 import { buildFlags } from './flags.js';
+import { getFlagOverrides } from './overrides.js';
 import { NoopProvider } from './providers/noop.js';
 import { UnleashProvider } from './providers/unleash.js';
 
@@ -28,6 +29,11 @@ const noopFlags = buildFlags(noopClient);
  * startup. Fail-open: uses flag defaults when the client cannot be created.
  */
 export async function initialize(): Promise<void> {
+    const overrides = getFlagOverrides();
+    if (overrides.size > 0) {
+        logger.info(`Feature flag overrides configured: ${[...overrides.keys()].join(', ')}`);
+    }
+
     let client: FeatureFlagsClient;
     try {
         client = await getFeatureFlagsClient();

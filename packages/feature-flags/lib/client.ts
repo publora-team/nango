@@ -2,9 +2,11 @@ import { OpenFeature } from '@openfeature/server-sdk';
 
 import { getLogger, metrics } from '@nangohq/utils';
 
+import { getFlagOverrides, readFlagOverride } from './overrides.js';
 import { NoopProvider } from './providers/noop.js';
 
-import type { FlagContext } from './types.js';
+import type { FlagOverrides } from './overrides.js';
+import type { FlagContext, FlagValueType } from './types.js';
 import type { Client, EvaluationContext, JsonValue, Provider } from '@openfeature/server-sdk';
 
 const logger = getLogger('FeatureFlags');
@@ -18,30 +20,29 @@ export interface FeatureFlagsClient {
     destroy(): Promise<void>;
 }
 
-type FlagValueType = 'boolean' | 'string' | 'number' | 'object';
-
 const FLAG_DOMAIN = 'nango-feature-flags';
 
-export function buildFeatureFlagsClient(provider: Provider): FeatureFlagsClient {
+export function buildFeatureFlagsClient(provider: Provider, overrides: FlagOverrides = getFlagOverrides()): FeatureFlagsClient {
     OpenFeature.setProvider(FLAG_DOMAIN, provider);
     const ofClient: Client = OpenFeature.getClient(FLAG_DOMAIN);
 
     return {
         isEnabled(key, context, defaultValue) {
-            return evaluateFlag(key, 'boolean', () => ofClient.getBooleanValue(key, defaultValue, toEvaluationContext(context)), defaultValue);
+            return evaluateFlag(key, 'boolean', () => ofClient.getBooleanValue(key, defaultValue, toEvaluationContext(context)), defaultValue, overrides);
         },
         getString(key, context, defaultValue) {
-            return evaluateFlag(key, 'string', () => ofClient.getStringValue(key, defaultValue, toEvaluationContext(context)), defaultValue);
+            return evaluateFlag(key, 'string', () => ofClient.getStringValue(key, defaultValue, toEvaluationContext(context)), defaultValue, overrides);
         },
         getNumber(key, context, defaultValue) {
-            return evaluateFlag(key, 'number', () => ofClient.getNumberValue(key, defaultValue, toEvaluationContext(context)), defaultValue);
+            return evaluateFlag(key, 'number', () => ofClient.getNumberValue(key, defaultValue, toEvaluationContext(context)), defaultValue, overrides);
         },
         getObject(key, context, defaultValue) {
             return evaluateFlag(
                 key,
                 'object',
                 async () => (await ofClient.getObjectValue(key, defaultValue, toEvaluationContext(context))) as typeof defaultValue,
-                defaultValue
+                defaultValue,
+                overrides
             );
         },
         async destroy() {
@@ -60,7 +61,13 @@ function toEvaluationContext(context: FlagContext): EvaluationContext {
     return out;
 }
 
-async function evaluateFlag<T>(key: string, type: FlagValueType, evaluate: () => Promise<T>, defaultValue: T): Promise<T> {
+async function evaluateFlag<T>(key: string, type: FlagValueType, evaluate: () => Promise<T>, defaultValue: T, overrides: FlagOverrides): Promise<T> {
+    const override = readFlagOverride<T>(key, type, overrides);
+    if (override !== undefined) {
+        recordFlagEvaluated(key, type, override, { overridden: true });
+        return override;
+    }
+
     let value: T;
     let usedDefault = false;
     try {
@@ -70,15 +77,18 @@ async function evaluateFlag<T>(key: string, type: FlagValueType, evaluate: () =>
         value = defaultValue;
         usedDefault = true;
     }
-    recordFlagEvaluated(key, type, value, usedDefault);
+    recordFlagEvaluated(key, type, value, { usedDefault });
     return value;
 }
 
-function recordFlagEvaluated(key: string, type: FlagValueType, value: unknown, usedDefault = false): void {
+function recordFlagEvaluated(key: string, type: FlagValueType, value: unknown, { usedDefault = false, overridden = false } = {}): void {
     try {
         const dimensions: Record<string, string> = { flag: key, type };
         if (usedDefault) {
             dimensions['used_default'] = 'true';
+        }
+        if (overridden) {
+            dimensions['overridden'] = 'true';
         }
         // Only boolean results are tagged — two values per flag. String/number/object
         // payloads can be unbounded and would blow up Datadog cardinality.

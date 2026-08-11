@@ -26,6 +26,10 @@ vi.mock('@nangohq/utils', () => ({
     }
 }));
 
+vi.mock('./env.js', () => ({
+    envs: { NANGO_CLOUD: false }
+}));
+
 vi.mock('@openfeature/server-sdk', () => ({
     OpenFeature: {
         setProvider: vi.fn(),
@@ -43,7 +47,7 @@ describe('buildFeatureFlagsClient', () => {
         const { buildFeatureFlagsClient } = await import('./client.js');
         const { NoopProvider } = await import('./providers/noop.js');
         openFeatureClient.getBooleanValue.mockRejectedValue(new Error('provider down'));
-        const client = buildFeatureFlagsClient(new NoopProvider());
+        const client = buildFeatureFlagsClient(new NoopProvider(), new Map());
         await expect(client.isEnabled('my-flag', {}, false)).resolves.toBe(false);
         expect(mockLogger.warning).toHaveBeenCalledWith('Feature flag evaluation failed, using default', {
             key: 'my-flag',
@@ -61,7 +65,7 @@ describe('buildFeatureFlagsClient', () => {
         const { buildFeatureFlagsClient } = await import('./client.js');
         const { NoopProvider } = await import('./providers/noop.js');
         openFeatureClient.getBooleanValue.mockResolvedValue(true);
-        const client = buildFeatureFlagsClient(new NoopProvider());
+        const client = buildFeatureFlagsClient(new NoopProvider(), new Map());
         await expect(client.isEnabled('oauth-state-cookie-enforcement', { targetingKey: 'uuid1' }, false)).resolves.toBe(true);
         expect(mockIncrement).toHaveBeenCalledWith('nango.feature_flags.evaluated', 1, {
             flag: 'oauth-state-cookie-enforcement',
@@ -74,7 +78,7 @@ describe('buildFeatureFlagsClient', () => {
         const { buildFeatureFlagsClient } = await import('./client.js');
         const { NoopProvider } = await import('./providers/noop.js');
         openFeatureClient.getStringValue.mockResolvedValue('new-ui');
-        const client = buildFeatureFlagsClient(new NoopProvider());
+        const client = buildFeatureFlagsClient(new NoopProvider(), new Map());
         await expect(client.getString('ui-variant', {}, 'old-ui')).resolves.toBe('new-ui');
         expect(mockIncrement).toHaveBeenCalledWith('nango.feature_flags.evaluated', 1, {
             flag: 'ui-variant',
@@ -86,7 +90,7 @@ describe('buildFeatureFlagsClient', () => {
         const { buildFeatureFlagsClient } = await import('./client.js');
         const { NoopProvider } = await import('./providers/noop.js');
         openFeatureClient.getNumberValue.mockResolvedValue(42);
-        const client = buildFeatureFlagsClient(new NoopProvider());
+        const client = buildFeatureFlagsClient(new NoopProvider(), new Map());
         await expect(client.getNumber('rate-limit', {}, 10)).resolves.toBe(42);
         expect(mockIncrement).toHaveBeenCalledWith('nango.feature_flags.evaluated', 1, {
             flag: 'rate-limit',
@@ -101,7 +105,7 @@ describe('buildFeatureFlagsClient', () => {
         mockIncrement.mockImplementation(() => {
             throw new Error('dogstatsd down');
         });
-        const client = buildFeatureFlagsClient(new NoopProvider());
+        const client = buildFeatureFlagsClient(new NoopProvider(), new Map());
         await expect(client.isEnabled('my-flag', {}, false)).resolves.toBe(true);
         expect(mockLogger.warning).not.toHaveBeenCalled();
     });
@@ -113,11 +117,59 @@ describe('buildFeatureFlagsClient', () => {
         mockIncrement.mockImplementation(() => {
             throw new Error('dogstatsd down');
         });
-        const client = buildFeatureFlagsClient(new NoopProvider());
+        const client = buildFeatureFlagsClient(new NoopProvider(), new Map());
         await expect(client.isEnabled('my-flag', {}, false)).resolves.toBe(false);
         expect(mockLogger.warning).toHaveBeenCalledWith('Feature flag evaluation failed, using default', {
             key: 'my-flag',
             err: expect.any(Error)
         });
+    });
+
+    it('returns the env override without asking the provider', async () => {
+        const { buildFeatureFlagsClient } = await import('./client.js');
+        const { NoopProvider } = await import('./providers/noop.js');
+        const client = buildFeatureFlagsClient(new NoopProvider(), new Map([['audit-trail', 'true']]));
+        await expect(client.isEnabled('audit-trail', { targetingKey: 'uuid1' }, false)).resolves.toBe(true);
+        expect(openFeatureClient.getBooleanValue).not.toHaveBeenCalled();
+        expect(mockIncrement).toHaveBeenCalledWith('nango.feature_flags.evaluated', 1, {
+            flag: 'audit-trail',
+            type: 'boolean',
+            overridden: 'true',
+            result: 'true'
+        });
+    });
+
+    it('overrides string, number and object flags', async () => {
+        const { buildFeatureFlagsClient } = await import('./client.js');
+        const { NoopProvider } = await import('./providers/noop.js');
+        const client = buildFeatureFlagsClient(
+            new NoopProvider(),
+            new Map([
+                ['ui-variant', 'new-ui'],
+                ['rate-limit', '42'],
+                ['limits', '{"max":3}']
+            ])
+        );
+        await expect(client.getString('ui-variant', {}, 'old-ui')).resolves.toBe('new-ui');
+        await expect(client.getNumber('rate-limit', {}, 10)).resolves.toBe(42);
+        await expect(client.getObject('limits', {}, { max: 1 })).resolves.toEqual({ max: 3 });
+    });
+
+    it('falls back to the provider when the override does not match the flag type', async () => {
+        const { buildFeatureFlagsClient } = await import('./client.js');
+        const { NoopProvider } = await import('./providers/noop.js');
+        openFeatureClient.getBooleanValue.mockResolvedValue(true);
+        const client = buildFeatureFlagsClient(new NoopProvider(), new Map([['audit-trail', 'maybe']]));
+        await expect(client.isEnabled('audit-trail', {}, false)).resolves.toBe(true);
+        expect(openFeatureClient.getBooleanValue).toHaveBeenCalled();
+    });
+
+    it('leaves flags without an override to the provider', async () => {
+        const { buildFeatureFlagsClient } = await import('./client.js');
+        const { NoopProvider } = await import('./providers/noop.js');
+        openFeatureClient.getBooleanValue.mockResolvedValue(false);
+        const client = buildFeatureFlagsClient(new NoopProvider(), new Map([['audit-trail', 'true']]));
+        await expect(client.isEnabled('mfa', {}, true)).resolves.toBe(false);
+        expect(openFeatureClient.getBooleanValue).toHaveBeenCalled();
     });
 });
